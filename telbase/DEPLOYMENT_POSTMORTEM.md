@@ -190,15 +190,68 @@ nvidia-valuation-model/
   .env.example       ← Shows DATABASE_URL, VITE_API_URL patterns
 ```
 
-### What the CLI's DetectMonorepo() Saw
+### What the CLI's DetectMonorepo() Actually Did (Code-Level Analysis)
 
-No root `package.json` with workspaces → npm/yarn/pnpm workspace detection returned false. The subdirectory detection (`backend/` + `frontend/`) should have caught this, but either:
-- It requires a workspace manifest file, or
-- It wasn't triggered because we `cd backend` before running `telbase deploy`
+We traced the exact execution path through the Telbase CLI source code (`internal/detector/monorepo.go`, `cmd/deploy.go`). The multi-service detection code was compiled and present — the binary was built the same day (Feb 27 12:26). **The issue was not missing code or a stale binary.**
+
+The root cause is a **self-check gate** at the top of `DetectMonorepo()`:
+
+```go
+// monorepo.go lines 32-38
+func DetectMonorepo(dir string) (*MonorepoResult, error) {
+    // If this directory IS a deployable project, it's not a monorepo root
+    if isDeployableProject(dir) {
+        return nil, nil  // ← exits immediately, no multi-service
+    }
+    // ... workspace detection, subdirectory scanning never reached ...
+}
+```
+
+We deployed from `nvidia-valuation-model/backend/`, which is a valid FastAPI project (has `requirements.txt` with `fastapi`). So `isDeployableProject("/path/to/backend")` returned `true`, and `DetectMonorepo()` returned `nil` — **multi-service detection was never attempted**.
+
+This is correct behavior in isolation: if you're standing in a deployable directory, treat it as a single project. But it creates a UX trap: deploying from a subdirectory of a monorepo silently skips multi-service orchestration with no warning.
+
+#### The call chain in deploy.go:
+
+```
+cmd/deploy.go:579  →  DetectMonorepo(cwd)
+                       ↓
+                   cwd = /path/to/backend
+                       ↓
+                   isDeployableProject(cwd) = true (FastAPI)
+                       ↓
+                   return nil, nil   ← multi-service SKIPPED
+                       ↓
+cmd/deploy.go:585  →  proceed with single-service deploy
+```
+
+#### What would have happened from the repo root:
+
+```
+cmd/deploy.go:579  →  DetectMonorepo(cwd)
+                       ↓
+                   cwd = /path/to/nvidia-valuation-model
+                       ↓
+                   isDeployableProject(cwd) = false (no requirements.txt/package.json at root)
+                       ↓
+                   scanSubdirectories(cwd)
+                       ↓
+                   Found: backend/ (FastAPI) + frontend/ (SvelteKit) = 2 candidates
+                       ↓
+                   return MonorepoResult{Services: [backend, frontend]}
+                       ↓
+cmd/deploy.go:590  →  runMultiServiceDeploy()  ← WOULD HAVE WORKED
+```
+
+**Multi-service would have activated correctly if we had deployed from the repo root.** The subdirectory scanning logic (`scanSubdirectories`) would have found both `backend/` and `frontend/` as independent deployable projects and triggered `runMultiServiceDeploy()` with priority ordering (backend+DB first, then frontend).
+
+#### The UX gap:
+
+The CLI has `FindProjectConfig()` (in `internal/config/project.go`) which walks UP from the current directory to find an existing `.telbase/config.json`. This helps for *subsequent* deploys from subdirectories after multi-service has already been configured. But on the **first deploy**, there's no config to find, so the upward walk finds nothing. There's no "you're inside a monorepo" warning when deploying from a subdirectory for the first time.
 
 ### What Should Have Happened
 
-Running `telbase deploy` from the repo root should have:
+Running `telbase deploy` from the repo root would have:
 
 1. **Detected two services**:
    - `backend/` → FastAPI (requirements.txt with fastapi) → GCP Cloud Run
@@ -267,8 +320,28 @@ Add to `internal/detector/procfile.go` or as a pre-deploy hook in `deploy-gcp.ts
 **5. Unconditional DATABASE_URL injection with `--database`**
 If the user explicitly passes `--database`, always inject `DATABASE_URL`. Don't gate on ORM detection. The user asked for a database — give them the connection string.
 
-**6. Subdirectory monorepo detection for non-JS repos**
-Enhance `DetectMonorepo()` to recognize:
+**6. Upward-looking monorepo warning on subdirectory deploy**
+The `DetectMonorepo()` self-check gate is correct in isolation, but it silently swallows a critical UX case. When deploying from a subdirectory for the first time, the CLI should look UP to the git root and check for other deployable siblings. A ~10-line fix:
+
+```go
+// In DetectMonorepo(), after the self-check gate returns nil:
+if isDeployableProject(dir) {
+    // Before returning, check if we're inside a larger monorepo
+    gitRoot := findGitRoot(dir)
+    if gitRoot != "" && gitRoot != dir {
+        result, _ := scanSubdirectories(gitRoot)
+        if result != nil && len(result.Services) >= 2 {
+            log.Warnf("Deploying single service from %s, but %d services "+
+                "detected in repo root %s. Run `telbase deploy` from %s "+
+                "for multi-service orchestration.", dir, len(result.Services),
+                gitRoot, gitRoot)
+        }
+    }
+    return nil, nil
+}
+```
+
+Additionally, `scanSubdirectories()` should recognize non-JS monorepo signals:
 - Two+ directories with independent dependency files (`requirements.txt`, `package.json`, `go.mod`)
 - `docker-compose.yml` with service definitions matching directory names
 - `.env.example` with cross-service env vars (`VITE_API_URL`, `CORS_ORIGINS`)
@@ -350,13 +423,15 @@ All three env vars should have been auto-injected by a working multi-service dep
 
 ## The Bottom Line
 
-Telbase's multi-service architecture — workspace detection, priority-ordered deploys, env var scoping, change detection, Worker path routing — is genuinely sophisticated infrastructure. But for this deployment, none of it activated. We fell into the manual path and hit every sharp edge: sslmode incompatibility, missing logs, cached failed builds, disconnected env vars.
+Telbase's multi-service architecture — workspace detection, priority-ordered deploys, env var scoping, change detection, Worker path routing — is genuinely sophisticated infrastructure. **It would have worked.** Running `telbase deploy` from the repo root would have detected both services, orchestrated the deploys in the right order, and wired up the env vars automatically. The subdirectory scanning code correctly identifies `backend/` (FastAPI) and `frontend/` (SvelteKit) as independent deployable projects.
 
-The gap is not in capability but in **activation**. The detection intelligence exists (`internal/detector/` has 18 files, 6.4K lines). The multi-service orchestration exists (`runMultiServiceDeploy()` with priority ordering). The env var scoping exists. But the signals from this repo — two subdirectories with different stacks, a `docker-compose.yml`, an `.env.example` showing cross-service env vars — didn't trigger the pipeline.
+But we deployed from `backend/`, and `DetectMonorepo()` has a self-check gate: if the current directory IS a deployable project, return nil immediately. This is architecturally sound — a directory that is itself deployable shouldn't be treated as a monorepo root. But with no upward-looking warning, the user has no way to know they're standing in one room of a house that the CLI could have furnished automatically.
+
+The gap is not in **capability** but in **discoverability**. The detection intelligence exists (`internal/detector/` has 18 files, 6.4K lines). The multi-service orchestration exists (`runMultiServiceDeploy()` with priority ordering). The env var scoping exists. All of it was compiled into the binary we used. We just invoked it from the wrong directory, and nothing told us.
 
 Three changes would have collapsed this 2-hour session into 10 minutes:
 1. **Log streaming** — see errors instantly instead of deploying debug endpoints
 2. **asyncpg-aware URL injection** — eliminate the #1 Python+Neon footgun
-3. **Subdirectory monorepo detection** — activate multi-service for non-JS repos
+3. **Upward-looking monorepo warning** — when deploying from a subdirectory, check the git root for sibling services and warn the user
 
 These aren't feature requests. They're the difference between "it just works" and "I spent 2 hours debugging a standard two-service app."
