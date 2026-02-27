@@ -192,62 +192,70 @@ nvidia-valuation-model/
 
 ### What the CLI's DetectMonorepo() Actually Did (Code-Level Analysis)
 
-We traced the exact execution path through the Telbase CLI source code (`internal/detector/monorepo.go`, `cmd/deploy.go`). The multi-service detection code was compiled and present — the binary was built the same day (Feb 27 12:26). **The issue was not missing code or a stale binary.**
+We traced the exact execution path through the Telbase CLI source code (`internal/detector/monorepo.go`, `cmd/deploy.go`).
 
-The root cause is a **self-check gate** at the top of `DetectMonorepo()`:
+**It's NOT the binary being stale.** The binary was built the same day (Feb 27 12:26) — `version dev`, `go1.25.6`. The published npm binary was also built the same day (12:49). All multi-service code from Phase 1/2/3 is compiled in. The issue was not missing code or a stale binary.
+
+**The real reason: a self-check gate + we deployed from the wrong directory.**
+
+The smoking gun is in `internal/detector/monorepo.go` lines 32-38:
 
 ```go
-// monorepo.go lines 32-38
-func DetectMonorepo(dir string) (*MonorepoResult, error) {
-    // If this directory IS a deployable project, it's not a monorepo root
-    if isDeployableProject(dir) {
-        return nil, nil  // ← exits immediately, no multi-service
-    }
-    // ... workspace detection, subdirectory scanning never reached ...
+// 1. Check if cwd is itself a deployable project — if so, single-service flow.
+info, _ := Detect(dir)
+if info != nil && info.Framework != FrameworkUnknown && info.Framework != FrameworkDocker {
+    logging.Debug("Directory is itself a deployable project (%s), not a monorepo", info.Framework)
+    return nil, nil  // ← EXITS IMMEDIATELY
 }
 ```
 
-We deployed from `nvidia-valuation-model/backend/`, which is a valid FastAPI project (has `requirements.txt` with `fastapi`). So `isDeployableProject("/path/to/backend")` returned `true`, and `DetectMonorepo()` returned `nil` — **multi-service detection was never attempted**.
+#### What happened when we ran `cd backend && telbase deploy`:
 
-This is correct behavior in isolation: if you're standing in a deployable directory, treat it as a single project. But it creates a UX trap: deploying from a subdirectory of a monorepo silently skips multi-service orchestration with no warning.
+1. `cwd` = `/nvidia-valuation-model/backend`
+2. `DetectMonorepo(cwd)` calls `Detect("/backend")`
+3. Finds `requirements.txt` + FastAPI → returns `FrameworkFastAPI`
+4. `FrameworkFastAPI != FrameworkUnknown` → **returns nil. Multi-service never runs.**
 
-#### The call chain in deploy.go:
+The `/backend` directory is itself a valid, deployable project. The detector says "this IS a project, not a monorepo" and exits. Reasonable logic — but it means deploying from a subdirectory always bypasses multi-service.
 
+#### If we had deployed from the root, it WOULD have worked:
+
+Running `cd /nvidia-valuation-model && telbase deploy` would have:
+
+1. `cwd` = `/nvidia-valuation-model`
+2. `DetectMonorepo(cwd)` calls `Detect("/nvidia-valuation-model")`
+3. Finds `docker-compose.yml` but no framework → `FrameworkUnknown`
+4. Falls through the self-check gate
+5. Skips workspace detection (no `package.json` with workspaces)
+6. Reaches subdirectory scanning (`scanSubdirectories`)
+7. Scans immediate children: finds `backend/` (FastAPI) + `frontend/` (SvelteKit)
+8. 2 candidates found → triggers `runMultiServiceDeploy()`
+
+**The multi-service pipeline would have activated.** The code was right there. We just never gave it the chance.
+
+#### The deeper UX gap:
+
+The issue is what happens on **first deploy from a subdirectory**. The flow in `deploy.go` lines 539-552 does walk UP to find a parent `.telbase/config.json`:
+
+```go
+existingCfg, cfgRoot, _ := config.FindProjectConfig()
+if existingCfg != nil && existingCfg.MultiService {
+    svc := config.ResolveServiceFromCwd(existingCfg, cfgRoot)
+    // ...routes to single-service redeploy within existing multi-service project
+}
 ```
-cmd/deploy.go:579  →  DetectMonorepo(cwd)
-                       ↓
-                   cwd = /path/to/backend
-                       ↓
-                   isDeployableProject(cwd) = true (FastAPI)
-                       ↓
-                   return nil, nil   ← multi-service SKIPPED
-                       ↓
-cmd/deploy.go:585  →  proceed with single-service deploy
-```
 
-#### What would have happened from the repo root:
+But this only works if a multi-service project already exists (i.e., you deployed from the root first). On first deploy from a subdirectory, there's no parent config to find, so it falls through to single-service. There's no "you're inside a monorepo" warning.
 
-```
-cmd/deploy.go:579  →  DetectMonorepo(cwd)
-                       ↓
-                   cwd = /path/to/nvidia-valuation-model
-                       ↓
-                   isDeployableProject(cwd) = false (no requirements.txt/package.json at root)
-                       ↓
-                   scanSubdirectories(cwd)
-                       ↓
-                   Found: backend/ (FastAPI) + frontend/ (SvelteKit) = 2 candidates
-                       ↓
-                   return MonorepoResult{Services: [backend, frontend]}
-                       ↓
-cmd/deploy.go:590  →  runMultiServiceDeploy()  ← WOULD HAVE WORKED
-```
+#### Who's at fault?
 
-**Multi-service would have activated correctly if we had deployed from the repo root.** The subdirectory scanning logic (`scanSubdirectories`) would have found both `backend/` and `frontend/` as independent deployable projects and triggered `runMultiServiceDeploy()` with priority ordering (backend+DB first, then frontend).
+| Factor | Blame | Fix |
+|--------|-------|-----|
+| Claude deployed from subdirectories | 100% Claude's mistake. Should have tried `telbase deploy` from the repo root first. | Better AI/docs: "for monorepos, deploy from root" |
+| Self-check gate exits early on valid projects | Correct behavior — a subdirectory IS a project | No change needed, logic is sound |
+| No "you're inside a monorepo" warning on first subdirectory deploy | UX gap in the CLI | Add the parent-check heuristic (see Recommendation #6) |
 
-#### The UX gap:
-
-The CLI has `FindProjectConfig()` (in `internal/config/project.go`) which walks UP from the current directory to find an existing `.telbase/config.json`. This helps for *subsequent* deploys from subdirectories after multi-service has already been configured. But on the **first deploy**, there's no config to find, so the upward walk finds nothing. There's no "you're inside a monorepo" warning when deploying from a subdirectory for the first time.
+The binary was fine. The multi-service code was fine. The detection logic is actually well-designed — it just has no upward-looking heuristic on first deploy. And the deploying agent (Claude) should have known to run from the root.
 
 ### What Should Have Happened
 
@@ -321,23 +329,18 @@ Add to `internal/detector/procfile.go` or as a pre-deploy hook in `deploy-gcp.ts
 If the user explicitly passes `--database`, always inject `DATABASE_URL`. Don't gate on ORM detection. The user asked for a database — give them the connection string.
 
 **6. Upward-looking monorepo warning on subdirectory deploy**
-The `DetectMonorepo()` self-check gate is correct in isolation, but it silently swallows a critical UX case. When deploying from a subdirectory for the first time, the CLI should look UP to the git root and check for other deployable siblings. A ~10-line fix:
+The `DetectMonorepo()` self-check gate is correct in isolation, but it silently swallows a critical UX case. When deploying from a subdirectory for the first time, the CLI should look UP to the git root and check for other deployable siblings. What's missing is ~10 lines after single-service detection, before creating the project:
 
 ```go
-// In DetectMonorepo(), after the self-check gate returns nil:
-if isDeployableProject(dir) {
-    // Before returning, check if we're inside a larger monorepo
-    gitRoot := findGitRoot(dir)
-    if gitRoot != "" && gitRoot != dir {
-        result, _ := scanSubdirectories(gitRoot)
-        if result != nil && len(result.Services) >= 2 {
-            log.Warnf("Deploying single service from %s, but %d services "+
-                "detected in repo root %s. Run `telbase deploy` from %s "+
-                "for multi-service orchestration.", dir, len(result.Services),
-                gitRoot, gitRoot)
-        }
+// After single-service detection, before creating the project:
+gitRoot := findGitRoot(cwd)
+if gitRoot != cwd {
+    parentCandidates, _ := DetectMonorepo(gitRoot)
+    if parentCandidates != nil && len(parentCandidates) >= 2 {
+        logging.Warn("Detected monorepo at %s with %d services. "+
+            "Run `telbase deploy` from %s to deploy all services together.",
+            gitRoot, len(parentCandidates), gitRoot)
     }
-    return nil, nil
 }
 ```
 
