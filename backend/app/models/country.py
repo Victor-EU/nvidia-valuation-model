@@ -11,7 +11,7 @@ class Country(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), nullable=False, unique=True, index=True)
-    moodys_rating = Column(String(10))
+    moodys_rating = Column(String(30))
     adj_default_spread = Column(Numeric(12, 8))
     equity_risk_premium = Column(Numeric(12, 8))
     country_risk_premium = Column(Numeric(12, 8))

@@ -20,7 +20,10 @@ from app.models import Country, Industry, SyntheticRating
 
 logger = logging.getLogger(__name__)
 
-EXCEL_FILE = Path(__file__).parent.parent.parent.parent / "data" / "NvidiaJan2025.xlsx"
+# Check both deployed location (backend/data/) and development location (../data/)
+_deployed_path = Path(__file__).parent.parent.parent / "data" / "NvidiaJan2025.xlsx"
+_dev_path = Path(__file__).parent.parent.parent.parent / "data" / "NvidiaJan2025.xlsx"
+EXCEL_FILE = _deployed_path if _deployed_path.exists() else _dev_path
 
 
 def safe_decimal(value, default: float = 0.0) -> Decimal:
@@ -97,11 +100,12 @@ class ExcelDataExtractor:
         sheet = self.workbook[sheet_name]
         countries = []
 
-        # Find header row and column indices
+        # Find header row — must have "country" in col 1 AND a rating-like header in col 2
         header_row = None
-        for row_idx in range(1, 10):
-            cell_value = sheet.cell(row=row_idx, column=1).value
-            if cell_value and "country" in str(cell_value).lower():
+        for row_idx in range(1, 15):
+            col1 = str(sheet.cell(row=row_idx, column=1).value or "").strip().lower()
+            col2 = str(sheet.cell(row=row_idx, column=2).value or "").strip().lower()
+            if col1 == "country" and ("rating" in col2 or "moody" in col2):
                 header_row = row_idx
                 break
 
