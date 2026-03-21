@@ -348,7 +348,7 @@
 	<footer class="bg-white border-t border-gray-200 mt-12">
 		<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
 			<div class="flex items-center justify-between text-sm text-gray-500">
-				<span>DCF Valuation Model • Based on Damodaran methodology</span>
+				<span>DCF Valuation Model • Based on <a href="https://www.youtube.com/watch?v=qOGZk9Ypk1Y" target="_blank" rel="noopener noreferrer" class="text-gray-600 hover:text-green-600 hover:underline transition-colors">Prof. Aswath Damodaran's NVIDIA valuation</a></span>
 				{#if modelState.lastCalculated}
 					<span>Last calculated: {modelState.lastCalculated.toLocaleTimeString()}</span>
 				{/if}
