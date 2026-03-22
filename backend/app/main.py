@@ -81,11 +81,6 @@ app = FastAPI(
 
 # CORS middleware
 cors_origins = settings.cors_origins.copy()
-if os.getenv("DATABASE_URL", "").startswith("postgresql"):
-    cors_origins.extend([
-        "https://nvidia-frontend.telbase.ai",
-        "https://nvidia-api.telbase.ai",
-    ])
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,

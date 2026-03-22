@@ -1,0 +1,30 @@
+{
+  "project_id": "e91e6183-1b43-4515-9e3e-8acd3e6c00b3",
+  "project_name": "nvidia-valuation-model",
+  "project_slug": "nvidia-valuation-model",
+  "detected_at": "2026-03-22T10:04:43Z",
+  "created_at": "2026-03-21T22:31:36.982Z",
+  "multi_service": true,
+  "services": [
+    {
+      "service_id": "f8d2ab9b-54ef-400d-b763-9ac6322d2244",
+      "name": "backend",
+      "slug": "nvidia-valuation-model-api",
+      "path": "./backend",
+      "service_role": "backend",
+      "framework": "fastapi",
+      "provider": "gcp",
+      "last_deploy_hash": "5bfda1f863c02ad2c344c84d4e6dd37e801ecab714defe096b87f9ab96bd40bb"
+    },
+    {
+      "service_id": "474e1a0c-c233-4a1b-83c7-8f98cf1920a7",
+      "name": "frontend",
+      "slug": "nvidia-valuation-model",
+      "path": "./frontend",
+      "service_role": "frontend",
+      "framework": "sveltekit",
+      "provider": "vercel",
+      "last_deploy_hash": "466b4b413a28102d33f3f2c1d010e2c663cbc3e415bd029008657548877816de"
+    }
+  ]
+}

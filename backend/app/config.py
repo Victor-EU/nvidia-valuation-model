@@ -29,7 +29,10 @@ class Settings(BaseSettings):
     debug: bool = False
 
     # CORS
-    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:5174", "http://localhost:5175", "http://localhost:3000"]
+    cors_origins: list[str] = [
+        "http://localhost:5173", "http://localhost:5174", "http://localhost:5175", "http://localhost:3000",
+        "https://nvidia-valuation-model.telbase.ai",
+    ]
 
     # SSL for asyncpg (derived from sslmode)
     database_ssl: bool = False
