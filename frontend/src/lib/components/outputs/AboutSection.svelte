@@ -3,14 +3,20 @@
 
 	<p class="text-sm text-gray-600 leading-relaxed">
 		This DCF valuation model is an experiment in automating financial modeling
-		with code. The thesis: AI coding agents will make spreadsheets like Excel
-		obsolete for this kind of work — bringing version control, testability,
+		with code instead of spreadsheets. The thesis: AI coding agents will make
+		Excel obsolete for this kind of work — bringing version control, testability,
 		and transparent assumptions to a domain still dominated by cell references
 		and manual formulas.
 	</p>
 
 	<p class="text-sm text-gray-600 leading-relaxed mt-2">
 		Every input is explicit. Every calculation is traceable. No hidden cells.
+	</p>
+
+	<p class="text-sm text-gray-600 leading-relaxed mt-2">
+		Based on <a href="https://www.youtube.com/watch?v=qOGZk9Ypk1Y" target="_blank" rel="noopener noreferrer"
+			class="text-gray-700 hover:text-nvidia-green-600 underline decoration-gray-300 hover:decoration-nvidia-green-500 transition-colors">Prof.
+			Aswath Damodaran's NVIDIA valuation</a> framework.
 	</p>
 
 	<div class="border-t border-gray-100 mt-4 pt-4 text-sm text-gray-500">
