@@ -17,6 +17,7 @@
 	import CostOfCapitalDisplay from '$lib/components/outputs/CostOfCapitalDisplay.svelte';
 	import ProjectionTable from '$lib/components/outputs/ProjectionTable.svelte';
 	import SegmentBreakdown from '$lib/components/outputs/SegmentBreakdown.svelte';
+	import AboutSection from '$lib/components/outputs/AboutSection.svelte';
 
 	// Shared components
 	import AutoUpdateModal from '$lib/components/shared/AutoUpdateModal.svelte';
@@ -340,6 +341,7 @@
 				</div>
 				<SegmentBreakdown />
 				<ProjectionTable />
+				<AboutSection />
 			</div>
 		{/if}
 	</main>
