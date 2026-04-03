@@ -30,6 +30,8 @@ try:
         settings.database_url,
         echo=False,
         future=True,
+        pool_pre_ping=True,
+        pool_recycle=300,
         connect_args=_connect_args if "asyncpg" in settings.database_url else {},
     )
     async_engine = engine
