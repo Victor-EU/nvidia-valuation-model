@@ -2,6 +2,7 @@
 NVIDIA Valuation Model API
 
 FastAPI application for DCF valuation calculations.
+Build: 2026-04-10 — auto-deploy test
 """
 
 import asyncio
